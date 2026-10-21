@@ -2,8 +2,7 @@ import pandas as pd
 import numpy as np
 import os
 
-RAW_DATA_DIR = 'data/raw'
-PROCESSED_DATA_DIR = 'data/processed'
+from src.config import RAW_DATA_DIR, PROCESSED_DATA_DIR
 
 def load_and_split_data():
     os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
