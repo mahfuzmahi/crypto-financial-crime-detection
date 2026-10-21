@@ -25,7 +25,7 @@ Detecting Illicit Bitcoin Transactions in the Elliptic Dataset using baseline mo
 git clone https://github.com/mahfuzmahi/crypto-financial-crime-detection.git
 cd crypto-financial-crime-detection
 
-python -3.13 -m venv .venv
+py -3.13 -m venv .venv
 .venv\Scripts\activate          #Windows
 # source .venv/bin/activate     #macOS / Linux
 
