@@ -3,10 +3,11 @@ import numpy as np
 from sklearn.ensemble import RandomForestClassifier, HistGradientBoostingClassifier
 from sklearn.metrics import precision_score, recall_score, f1_score, average_precision_score, confusion_matrix
 
+from src.config import PROCESSED_DATA_DIR, SEED
 def run_experiments():
     print("loading train & test datasets from data/processed/...")
-    train_df = pd.read_csv('data/processed/train_split.csv')
-    test_df = pd.read_csv('data/processed/test_split.csv')
+    train_df = pd.read_csv(PROCESSED_DATA_DIR / 'train_split.csv')
+    test_df = pd.read_csv(PROCESSED_DATA_DIR / 'test_split.csv')
 
     local_cols = [f'feat_{i}' for i in range(1, 95)]
     all_cols = [f'feat_{i}' for i in range(1, 166)]
@@ -23,7 +24,7 @@ def run_experiments():
         X_train, X_test = train_df[cols], test_df[cols]
 
         # ran forest balanced
-        rf = RandomForestClassifier(n_estimators=100, class_weight='balanced', random_state=42, n_jobs=-1)
+        rf = RandomForestClassifier(n_estimators=100, class_weight='balanced', random_state=SEED, n_jobs=-1)
         rf.fit(X_train, y_train)
         rf_probs = rf.predict_proba(X_test)[:, 1]
         rf_preds = (rf_probs >= 0.5).astype(int)
@@ -37,7 +38,7 @@ def run_experiments():
         print(confusion_matrix(y_test, rf_preds))
 
         # gradient boosting; scikit-learn native, class balanced
-        gb = HistGradientBoostingClassifier(class_weight='balanced', random_state=42)
+        gb = HistGradientBoostingClassifier(class_weight='balanced', random_state=SEED)
         gb.fit(X_train, y_train)
         gb_probs = gb.predict_proba(X_test)[:, 1]
         gb_preds = (gb_probs >= 0.5).astype(int)
