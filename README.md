@@ -38,6 +38,7 @@ pip install -r requirements.txt
 
 ## How to Run
 Run from the **repository root** as a module (`python -m ...`) in this order:
+
 python -m src.data_loader
 
 python -m src.exploratory_data_analysis
