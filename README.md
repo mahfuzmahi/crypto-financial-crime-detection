@@ -10,9 +10,11 @@ Detecting Illicit Bitcoin Transactions in the Elliptic Dataset using baseline mo
 |--results/
 |--src/
 |  |--config.py
-|  |--dataloader.py
+|  |--data_loader.py
 |  |--exploratory_data_analysis.py
 |  |--baseline_models.py
+|  |--graph_data.py
+|  |--graph_sage.py
 |--requirements.txt
 |--README.md
 ```
@@ -44,4 +46,20 @@ python -m src.data_loader
 python -m src.exploratory_data_analysis
 
 python -m src.baseline_models
+
+python -m src.graph_data --features local
+python -m src.graph_data --features all
+
+python -m src.graph_sage --features local --seed 1      #repeat with --seed 2 and --seed 3
+python -m src.graph_sage --features all --seed 1        #repeat with --seed 2 and --seed 3
+```
+
+## Outputs
+Results are saved in the following locations:
+```
+results/baseline_metrics.csv
+results/graph_sage_metrics_{features}_s{seed}.csv
+results/graph_sage_history_{features}_s{seed}.csv
+reports/figures/12_*
+reports/figures/13_*
 ```
