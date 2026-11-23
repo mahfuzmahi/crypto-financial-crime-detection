@@ -50,8 +50,8 @@ python -m src.baseline_models
 python -m src.graph_data --features local
 python -m src.graph_data --features all
 
-python -m src.graph_sage --features local --seed 1      #repeat with --seed 2 and --seed 3
-python -m src.graph_sage --features all --seed 1        #repeat with --seed 2 and --seed 3
+python -m src.graphsage --features local --seed 1      #repeat with --seed 2 and --seed 3
+python -m src.graphsage --features all --seed 1        #repeat with --seed 2 and --seed 3
 ```
 
 ## Outputs
