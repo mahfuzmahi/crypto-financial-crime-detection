@@ -12,9 +12,6 @@ from sklearn.metrics import precision_score, recall_score, f1_score, average_pre
 
 from src.config import PROCESSED_DATA_DIR, RESULTS_DIR, FIGURES_DIR, SEED
 
-#Regularizing: Weight decay, dropout, early stopping
-HPARAMS = dict(hidden=128, hidden2=64, dropout=0.5, lr=0.01, weight_decay=5e-4, 
-               epochs=300, patience=30)
 
 def set_seed(seed):
     random.seed(seed)
@@ -24,20 +21,23 @@ def set_seed(seed):
     torch.use_deterministic_algorithms(True, warn_only=True)
 
 class GraphSAGE(nn.Module):
-    def __init__(self, in_dim, h1, h2, dropout):
+    def __init__(self, in_dim, hidden_dims, dropout, norm='batch'):
         super().__init__()
+        dims = [in_dim] + hidden_dims
         # mean aggregation, each node combines own features with average of neighbors
-        self.conv1, self.bn1 = SAGEConv(in_dim, h1, aggr='mean'), nn.BatchNorm1d(h1)
-        self.conv2, self.bn2 = SAGEConv(h1, h2, aggr='mean'), nn.BatchNorm1d(h2)
-        #2 outputs, licit / illicit
-        self.head = nn.Linear(h2, 2)
+        self.convs = nn.ModuleList(SAGEConv(a, b, aggr='mean') for a, b in zip(dims, dims[1:]))
+        make_norm = {'batch': nn.BatchNorm1d, 'layer': nn.LayerNorm, 'none': nn.Identity}[norm]
+        self.norms = nn.ModuleList(make_norm(d) for d in hidden_dims)
+        self.head = nn.Linear(hidden_dims[-1], 2)
         self.dropout = dropout
 
-    #Per layer: SAGEConv into BatchNorm into ReLU into Dropout
+    def embed(self, x, edge_index):
+        for conv, norm in zip(self.convs, self.norms):
+            x = F.dropout(F.relu(norm(conv(x, edge_index))), self.dropout, self.training)
+        return x
+
     def forward(self, x, edge_index):
-        x = F.dropout(F.relu(self.bn1(self.conv1(x, edge_index))), self.dropout, self.training)
-        x = F.dropout(F.relu(self.bn2(self.conv2(x, edge_index))), self.dropout, self.training)
-        return self.head(x)
+        return self.head(self.embed(x, edge_index))
     
 #Threshold based metrics for the illicit class, PR-AUC is threshold-free
 def metrics(y_true, prob, thr=0.5):
@@ -63,21 +63,34 @@ def evaluate(model, data, mask, loss_fn):
     prob = out[mask].softmax(-1)[:, 1].cpu().numpy()
     return loss, prob, data.y[mask].cpu().numpy()
 
-def main(feature_set, seed):
-    set_seed(seed)
+def main(args):
+    set_seed(args.seed)
+    fs = args.features
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
     #weights_only=False needed to load PyG Data object
-    data = torch.load(PROCESSED_DATA_DIR / f'elliptic_graph_{feature_set}.pt', weights_only=False).to(device)
+    suffix = '' if args.scaler == 'quantile' else f'_{args.scaler}'
+    data = torch.load(PROCESSED_DATA_DIR / f'elliptic_graph_{fs}{suffix}.pt', weights_only=False).to(device)
 
-    #inverse-frequency class weights, illicit is upweighted
-    counts = torch.bincount(data.y[data.train_mask], minlength=2).float()
-    loss_fn = nn.CrossEntropyLoss(weight=(counts.sum() / (2 * counts)).to(device))
-    h = HPARAMS
-    model = GraphSAGE(data.num_features, h['hidden'], h['hidden2'], h['dropout']).to(device)
-    opt = torch.optim.Adam(model.parameters(), lr=h['lr'], weight_decay=h['weight_decay'])
+    #Experimenting with clipping data
+    if args.clip is not None:
+        data.x = data.x.clamp(-args.clip, args.clip)
+    if args.no_edges:
+        #no neighbors: every SAGECConv reduces to a per node linear layer
+        data.edge_index = torch.empty(2, 0, dtype=torch.long, device=device)
+    if args.no_class_weights:
+        loss_fn = nn.CrossEntropyLoss()
+    else:
+        counts = torch.bincount(data.y[data.train_mask], minlength=2).float()
+        loss_fn = nn.CrossEntropyLoss(weight=(counts.sum() / (2 * counts)).to(device))
+    #hidden sizes halve per layer
+    hidden_dims = [args.hidden // 2 ** i for i in range(args.layers)]
+    model = GraphSAGE(data.num_features, hidden_dims, args.dropout, norm=args.norm).to(device)
+    opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.wd)
+
     history, best_auc, best_state, best_epoch, wait = [], -1, None, 0, 0
     t0 = time.time()
-    for epoch in range(1, h['epochs'] + 1):
+    for epoch in range(1, args.epochs + 1):
         model.train()
         opt.zero_grad()
         #full batch, whole graph each step, loss uses training nodes only
@@ -99,7 +112,7 @@ def main(feature_set, seed):
             best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
         else:
             wait += 1
-            if wait >= h['patience']:
+            if wait >= args.patience:
                 print(f"Early stop at epoch {epoch}, best epoch {best_epoch} (val PR-AUC {best_auc:.4f})")
                 break
     train_time = time.time() - t0
@@ -110,19 +123,24 @@ def main(feature_set, seed):
     thr = pick_threshold(val_y, val_prob)
     _, test_prob, test_y = evaluate(model, data, data.test_mask, loss_fn)
     test_m = metrics(test_y, test_prob, thr)
+    pred = (test_prob >= thr).astype(int)
+    tn, fp, fn, tp = confusion_matrix(test_y, pred).ravel()
+
     print(f"Threshold (val-F1-Optimal): {thr:.3f}")
-    print(f"\nTEST ({feature_set}) " + " | ".join(f"{k} {v:.4f}" for k, v in test_m.items()))
-    print("Confusion Matrix [TN FP / FN TP]:\n", confusion_matrix(test_y, (test_prob >= thr).astype(int)))
+    print(f"\nTEST ({fs}{' ' + args.tag if args.tag else ''}) " + " | ".join(f"{k} {v:.4f}" for k, v in test_m.items()))
+    print(f"Confusion Matrix [TN FP / FN TP]:\n[[{tn} {fp}]\n [{fn} {tp}]]")
     print(f"Device {device} | Train Time {train_time:.1f}s | Stopped Epoch {epoch} | Best Epoch {best_epoch}")
 
+    run = f"{fs}_s{args.seed}" + (f"_{args.tag}" if args.tag else "")
     RESULTS_DIR.mkdir(exist_ok=True)
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     hist = pd.DataFrame(history)
-    hist.to_csv(RESULTS_DIR / f'graphsage_history_{feature_set}_s{seed}.csv', index=False)
+    hist.to_csv(RESULTS_DIR / f'graphsage_history_{run}.csv', index=False)
     #one row per run with metrics, threshold, seed, and hyperparams
-    pd.DataFrame([dict(model='GraphSAGE', features=feature_set, **test_m, threshold=thr, seed=seed, best_epoch=best_epoch,
-                       stopped_epoch=epoch, train_time_s=train_time, device=str(device), **h),]
-                       ).to_csv(RESULTS_DIR / f'graphsage_metrics_{feature_set}_s{seed}.csv', index=False)
+    pd.DataFrame([dict(model='GraphSAGE', **test_m, threshold=thr, tn=tn, fp=fp, fn=fn,
+                       tp=tp, best_epoch=best_epoch,stopped_epoch=epoch, 
+                       train_time_s=train_time, device=str(device), **vars(args)),]
+                       ).to_csv(RESULTS_DIR / f'graphsage_metrics_{run}.csv', index=False)
 
     # Learning curve: train vs val loss with best epoch marked
     plt.figure(figsize=(7, 4))
@@ -130,26 +148,47 @@ def main(feature_set, seed):
     plt.plot(hist.epoch, hist.val_loss, label = 'val loss')
     plt.axvline(best_epoch, ls='--', c='grey', label=f'Best Epoch ({best_epoch})')
     plt.xlabel('Epoch')
-    plt.ylabel('Weighted Cross-Entropy Loss')
-    plt.title(f'GraphSAGE learning curve ({feature_set})')
+    plt.ylabel('Weighted Cross-Entropy Loss' if not args.no_class_weights else 'Cross-Entropy Loss')
+    plt.title(f'GraphSAGE learning curve ({run})')
     plt.legend()
-    plt.savefig(FIGURES_DIR / f'12_GraphSAGE_Learning_Curve_{feature_set}_s{seed}.png', dpi=150, bbox_inches='tight')
+    plt.savefig(FIGURES_DIR / f'12_GraphSAGE_Learning_Curve_{run}.png', dpi=150, bbox_inches='tight')
 
     #test F1 per timestep, shows collapse after step 43
     ts = data.time_step[data.test_mask].cpu().numpy()
-    pred = (test_prob >= thr).astype(int)
     steps = sorted(set(ts))
     f1s = [f1_score(test_y[ts == s], pred[ts == s], zero_division=0) for s in steps]
     plt.figure(figsize=(7, 4))
     plt.bar(steps, f1s)
     plt.xlabel("Time Step")
     plt.ylabel("Illicit F1")
-    plt.title(f'GraphSAGE Test F1 per Time Step ({feature_set})')
-    plt.savefig(FIGURES_DIR / f'13_GraphSAGE_F1_Per_Step_{feature_set}_s{seed}.png', dpi=150, bbox_inches='tight')
+    plt.title(f'GraphSAGE Test F1 per Time Step ({run})')
+    plt.savefig(FIGURES_DIR / f'13_GraphSAGE_F1_Per_Step_{run}.png', dpi=150, bbox_inches='tight')
+    plt.close('all')
 
-if __name__ == '__main__':
+    return model, data
+
+def parse_args(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument('--features', choices=['local', 'all'], default='all')
     p.add_argument('--seed', type=int, default=SEED)
-    args = p.parse_args()
-    main(args.features, args.seed)
+
+    #model and optimiser
+    p.add_argument('--layers', type=int, default=2)
+    p.add_argument('--hidden', type=int, default=128)
+    p.add_argument('--dropout', type=float, default=0.5)
+    p.add_argument('--norm', choices=['batch', 'layer', 'none'], default='batch')
+    p.add_argument('--lr', type=float, default=0.01)
+    p.add_argument('--wd', type=float, default=5e-4) #L2 weight decay
+    p.add_argument('--epochs', type=int, default=300)
+    p.add_argument('--patience', type=int, default=30) #set >= epochs to disable early stopping
+
+    #experiments
+    p.add_argument('--scaler', choices=['quantile', 'standard'], default='quantile')
+    p.add_argument('--clip', type=float, default=None)
+    p.add_argument('--no-class-weights', action='store_true')
+    p.add_argument('--no-edges', action='store_true')
+    p.add_argument('--tag', default='')
+    return p.parse_args(argv)
+
+if __name__ == '__main__':
+    main(parse_args())

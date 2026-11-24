@@ -4,7 +4,7 @@ import argparse
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.preprocessing import QuantileTransformer
+from sklearn.preprocessing import QuantileTransformer, StandardScaler
 from torch_geometric.data import Data
 from torch_geometric.utils import to_undirected
 
@@ -20,7 +20,7 @@ FEATURE_SETS = {
 }
 
 #Col 0 = txId, col1 = time step, cols 2-166 = anonymised features
-def build_graph(feature_set='all'):
+def build_graph(feature_set='all', scaler_name='quantile'):
     PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     feats = pd.read_csv(RAW_DATA_DIR / 'elliptic_txs_features.csv', header=None)
@@ -48,9 +48,13 @@ def build_graph(feature_set='all'):
     test_mask = labeled & (ts > VAL_END)
 
     cols = FEATURE_SETS[feature_set]
+    if scaler_name == 'quantile':
+        scaler = QuantileTransformer(output_distribution='normal', n_quantiles=1000,
+                                         random_state=SEED)
+    else:
+        scaler = StandardScaler()
     #Quantile -> normal transform, fitted on training period
-    scaler = QuantileTransformer(output_distribution='normal', n_quantiles=1000,
-                                 random_state=SEED).fit(df.loc[ts <= TRAIN_END, cols])
+    scaler.fit(df.loc[ts <= TRAIN_END, cols])
     #Rank-based scaling removes outliers and is robust to feature drift
     x = scaler.transform(df[cols]).astype(np.float32)
 
@@ -66,7 +70,8 @@ def build_graph(feature_set='all'):
     )
 
     #one file per feature set
-    out = PROCESSED_DATA_DIR / f'elliptic_graph_{feature_set}.pt'
+    suffix = '' if scaler_name == 'quantile' else f'_{scaler_name}'
+    out = PROCESSED_DATA_DIR / f'elliptic_graph_{feature_set}{suffix}.pt'
     torch.save(data, out)
     print(data)
     print(f"train/val/test labeled nodes: {train_mask.sum():,} / {val_mask.sum():,} / {test_mask.sum():,}")
@@ -78,4 +83,6 @@ def build_graph(feature_set='all'):
 if __name__ == '__main__':
     p = argparse.ArgumentParser()
     p.add_argument('--features', choices=FEATURE_SETS, default='all')
-    build_graph(p.parse_args().features)
+    p.add_argument('--scaler', choices=['quantile', 'standard'], default='quantile')
+    args = p.parse_args()
+    build_graph(args.features, args.scaler)
