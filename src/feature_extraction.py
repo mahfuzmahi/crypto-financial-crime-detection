@@ -8,14 +8,16 @@ from src.config import PROCESSED_DATA_DIR
 
 def load_data():
     # load the normalized data
-    folder = PROCESSED_DATA_DIR / 'transformation'
+    folder = PROCESSED_DATA_DIR / 'aligned' / 'transformation'
     train = pd.read_csv(folder / 'train_scaled.csv')
+    validation = pd.read_csv(folder / 'validation_scaled.csv')
     test = pd.read_csv(folder / 'test_scaled.csv')
     cols = [f'feat_{i}' for i in range(1, 166)]
     print("training transactions:", len(train))
+    print("validation transactions:", len(validation))
     print("testing transactions:", len(test))
     print("original features:", len(cols))
-    return train, test, cols
+    return train, validation, test, cols
 
 def find_correlations(train, cols):
     # find highly correlated features
@@ -38,7 +40,7 @@ def find_correlations(train, cols):
     print(results.head(10).round(4).to_string(index=False))
     return selected, results
 
-def extract_features(train, test, selected):
+def extract_features(train, validation, test, selected):
     # apply pca to the correlated features
     if not selected:
         raise ValueError("no highly correlated features found")
@@ -50,18 +52,20 @@ def extract_features(train, test, selected):
     count = np.searchsorted(cumulative, 0.95) + 1
     names = [f'pc_{i}' for i in range(1, count + 1)]
 
-    # transform the training and testing data
+    # transform the training, validation and testing data
     train_pc = pd.DataFrame(pca.transform(train[selected])[:, :count], columns=names, index=train.index)
+    validation_pc = pd.DataFrame(pca.transform(validation[selected])[:, :count], columns=names, index=validation.index)
     test_pc = pd.DataFrame(pca.transform(test[selected])[:, :count], columns=names, index=test.index)
 
     # replace the correlated features
     train = pd.concat([train.drop(columns=selected), train_pc], axis=1)
+    validation = pd.concat([validation.drop(columns=selected), validation_pc], axis=1)
     test = pd.concat([test.drop(columns=selected), test_pc], axis=1)
     results = pd.DataFrame({'component': range(1, len(variance) + 1), 'explained_variance': variance, 'cumulative_variance': cumulative})
     print("original correlated features:", len(selected))
     print("principal components retained:", count)
     print("variance retained:", round(cumulative[count - 1] * 100, 4), "%")
-    return train, test, results, count
+    return train, validation, test, results, count
 
 def plot_correlations(pairs, folder):
     # show the top 10 correlated pairs
@@ -93,11 +97,12 @@ def plot_variance(results, count, folder):
     plt.savefig(folder / 'pca_variance.png', dpi=300)
     plt.close()
 
-def save_results(train, test, pairs, results, selected, count, cols):
+def save_results(train, validation, test, pairs, results, selected, count, cols):
     # save the extracted features
-    folder = PROCESSED_DATA_DIR / 'extraction'
+    folder = PROCESSED_DATA_DIR / 'aligned' / 'extraction'
     folder.mkdir(parents=True, exist_ok=True)
     train.to_csv(folder / 'train_pca.csv', index=False)
+    validation.to_csv(folder / 'validation_pca.csv', index=False)
     test.to_csv(folder / 'test_pca.csv', index=False)
     pairs.to_csv(folder / 'correlated_pairs.csv', index=False)
     results.to_csv(folder / 'pca_components.csv', index=False)
@@ -123,10 +128,10 @@ def save_results(train, test, pairs, results, selected, count, cols):
     print("files saved to:", folder)
 
 def main():
-    train, test, cols = load_data()  # load the data
+    train, validation, test, cols = load_data()  # load the data
     selected, pairs = find_correlations(train, cols) # find correlated features
-    train, test, results, count = extract_features(train, test, selected) # extract new features
-    save_results(train, test, pairs, results, selected, count, cols)
+    train, validation, test, results, count = extract_features(train, validation, test, selected) # extract new features
+    save_results(train, validation, test, pairs, results, selected, count, cols)
     print("feature extraction completed")
 
 if __name__ == "__main__":
