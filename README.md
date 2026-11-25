@@ -20,6 +20,7 @@ Detecting Illicit Bitcoin Transactions in the Elliptic Dataset using baseline mo
 |  |--data_transformation.py  
 |  |--feature_selection.py
 |  |--feature_extraction.py
+|  |--feature_evaluation.py
 |--requirements.txt
 |--README.md
 ```
@@ -52,6 +53,7 @@ python -m src.data_cleaning
 python -m src.data_transformation
 python -m src.feature_selection
 python -m src.feature_extraction
+python -m src.feature_evaluation
 
 python -m src.exploratory_data_analysis
 
@@ -66,7 +68,7 @@ python -m src.graph_sage --features all --seed 1        #repeat with --seed 2 an
 python -m src.experiments --features local --seed 1     #GraphSAGE embeddings + Random Forest
 python -m src.experiments --features all --seed 1
 ```
-The preprocessing scripts are the analysis for Assignment 3, models use their own quantile transform
+The preprocessing scripts are the analysis for Assignment 3, the models in Section 4 still use all 93 or 165 features
 ### Ablations 
 `--tag` adds a suffix to the output file names so runs don't overwrite each other
 ```
@@ -90,5 +92,6 @@ results/graphsage_history_{features}_s{seed}[_{tag}].csv
 reports/figures/12_*
 reports/figures/13_*
 results/experiment_rf_embeddings_{features}_s{seed}.csv
-data/processed/cleaning, transformation, selection, extraction
+data/processed/cleaning
+data/processed/aligned/transformation, selection, extraction
 ```
